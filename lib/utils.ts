@@ -1,5 +1,21 @@
-import { Expense, ExpenseCategory, ExpenseSummary } from '@/types';
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO } from 'date-fns';
+import { Expense, ExpenseCategory, ExpenseSummary, DatePreset, SortConfig, GroupByOption } from '@/types';
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  isWithinInterval,
+  parseISO,
+  startOfDay,
+  endOfDay,
+  startOfWeek,
+  endOfWeek,
+  startOfYear,
+  endOfYear,
+  subDays,
+  subMonths,
+  subYears,
+  differenceInDays
+} from 'date-fns';
 
 export const formatCurrency = (amount: number): string => {
   return new Intl.NumberFormat('en-US', {
@@ -42,6 +58,142 @@ export const validateExpense = (
   return null;
 };
 
+export const getDateRangeFromPreset = (preset: DatePreset): { startDate: Date; endDate: Date } | null => {
+  const now = new Date();
+
+  switch (preset) {
+    case 'today':
+      return {
+        startDate: startOfDay(now),
+        endDate: endOfDay(now)
+      };
+    case 'yesterday':
+      const yesterday = subDays(now, 1);
+      return {
+        startDate: startOfDay(yesterday),
+        endDate: endOfDay(yesterday)
+      };
+    case 'thisWeek':
+      return {
+        startDate: startOfWeek(now, { weekStartsOn: 0 }),
+        endDate: endOfWeek(now, { weekStartsOn: 0 })
+      };
+    case 'lastWeek':
+      const lastWeek = subDays(now, 7);
+      return {
+        startDate: startOfWeek(lastWeek, { weekStartsOn: 0 }),
+        endDate: endOfWeek(lastWeek, { weekStartsOn: 0 })
+      };
+    case 'thisMonth':
+      return {
+        startDate: startOfMonth(now),
+        endDate: endOfMonth(now)
+      };
+    case 'lastMonth':
+      const lastMonth = subMonths(now, 1);
+      return {
+        startDate: startOfMonth(lastMonth),
+        endDate: endOfMonth(lastMonth)
+      };
+    case 'last3Months':
+      return {
+        startDate: startOfMonth(subMonths(now, 2)),
+        endDate: endOfMonth(now)
+      };
+    case 'last6Months':
+      return {
+        startDate: startOfMonth(subMonths(now, 5)),
+        endDate: endOfMonth(now)
+      };
+    case 'thisYear':
+      return {
+        startDate: startOfYear(now),
+        endDate: endOfYear(now)
+      };
+    case 'lastYear':
+      const lastYear = subYears(now, 1);
+      return {
+        startDate: startOfYear(lastYear),
+        endDate: endOfYear(lastYear)
+      };
+    case 'custom':
+      return null;
+    default:
+      return null;
+  }
+};
+
+export const sortExpenses = (expenses: Expense[], sortConfig: SortConfig): Expense[] => {
+  return [...expenses].sort((a, b) => {
+    let comparison = 0;
+
+    switch (sortConfig.field) {
+      case 'date':
+        comparison = parseISO(a.date).getTime() - parseISO(b.date).getTime();
+        break;
+      case 'amount':
+        comparison = a.amount - b.amount;
+        break;
+      case 'category':
+        comparison = a.category.localeCompare(b.category);
+        break;
+      case 'description':
+        comparison = a.description.localeCompare(b.description);
+        break;
+    }
+
+    return sortConfig.direction === 'asc' ? comparison : -comparison;
+  });
+};
+
+export const groupExpenses = (expenses: Expense[], groupBy: GroupByOption): Record<string, Expense[]> => {
+  if (groupBy === 'none') {
+    return { 'All Expenses': expenses };
+  }
+
+  const groups: Record<string, Expense[]> = {};
+
+  expenses.forEach((expense) => {
+    let groupKey: string;
+
+    switch (groupBy) {
+      case 'category':
+        groupKey = expense.category;
+        break;
+      case 'day':
+        groupKey = format(parseISO(expense.date), 'MMM dd, yyyy');
+        break;
+      case 'week':
+        const weekStart = startOfWeek(parseISO(expense.date), { weekStartsOn: 0 });
+        groupKey = `Week of ${format(weekStart, 'MMM dd, yyyy')}`;
+        break;
+      case 'month':
+        groupKey = format(parseISO(expense.date), 'MMMM yyyy');
+        break;
+      case 'year':
+        groupKey = format(parseISO(expense.date), 'yyyy');
+        break;
+      case 'amountRange':
+        if (expense.amount < 25) groupKey = '$0 - $25';
+        else if (expense.amount < 50) groupKey = '$25 - $50';
+        else if (expense.amount < 100) groupKey = '$50 - $100';
+        else if (expense.amount < 250) groupKey = '$100 - $250';
+        else if (expense.amount < 500) groupKey = '$250 - $500';
+        else groupKey = '$500+';
+        break;
+      default:
+        groupKey = 'All Expenses';
+    }
+
+    if (!groups[groupKey]) {
+      groups[groupKey] = [];
+    }
+    groups[groupKey].push(expense);
+  });
+
+  return groups;
+};
+
 export const calculateSummary = (expenses: Expense[]): ExpenseSummary => {
   const now = new Date();
   const monthStart = startOfMonth(now);
@@ -79,11 +231,36 @@ export const calculateSummary = (expenses: Expense[]): ExpenseSummary => {
     null as { category: ExpenseCategory; amount: number } | null
   );
 
+  // Enhanced statistics
+  const averageExpense = expenses.length > 0 ? totalExpenses / expenses.length : 0;
+
+  const sortedByAmount = [...expenses].sort((a, b) => a.amount - b.amount);
+  const highestExpense = sortedByAmount[sortedByAmount.length - 1] || null;
+  const lowestExpense = sortedByAmount[0] || null;
+
+  // Calculate average daily
+  let averageDaily = 0;
+  if (expenses.length > 0) {
+    const dates = expenses.map(e => parseISO(e.date));
+    const oldestDate = new Date(Math.min(...dates.map(d => d.getTime())));
+    const daysDiff = differenceInDays(now, oldestDate) + 1;
+    averageDaily = daysDiff > 0 ? totalExpenses / daysDiff : 0;
+  }
+
+  // Average monthly (total / number of months with data)
+  const averageMonthly = monthlyTotal; // Simplified for now
+
   return {
     totalExpenses,
     monthlyTotal,
     categoryTotals,
     topCategory,
+    averageExpense,
+    averageDaily,
+    averageMonthly,
+    highestExpense,
+    lowestExpense,
+    expenseCount: expenses.length,
   };
 };
 
